@@ -110,22 +110,27 @@ def _parse_old(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _parse_new(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise the post-July-2024 UDiFF column names."""
+    """Normalise the post-July-2024 UDiFF column names (NSE Circular 62424)."""
     df.columns = [c.strip() for c in df.columns]
-    df = df[df.get("FinInstrmTp", df.get("Sgmt", "")).isin(["OPTIDX", "OPTSTK"])].copy()
+    # Filter to options rows — FinInstrmTp column uses "OPT" prefix in UDiFF
+    if "FinInstrmTp" in df.columns:
+        df = df[df["FinInstrmTp"].isin(["OPTIDX", "OPTSTK", "OPT"])].copy()
     return df.rename(columns={
-        "TckrSymb":        "symbol",
-        "XpryDt":          "expiry",
-        "StrkPric":        "strike",
-        "OptnTp":          "opt_type",  # CE / PE
-        "OpnPric":         "open",
-        "HghPric":         "high",
-        "LwPric":          "low",
-        "ClsPric":         "close",
-        "SttlmPric":       "settle",
-        "OpnIntrst":       "oi",
-        "ChngInOpnIntrst": "oi_chg",
-        "TtlTrfVal":       "contracts",
+        "TckrSymb":          "symbol",
+        "XpryDt":            "expiry",
+        "StrkPric":          "strike",
+        "OptnTp":            "opt_type",   # CE / PE
+        "OpnPric":           "open",
+        "HighPric":          "high",       # note: HighPric not HghPric
+        "LowPric":           "low",        # note: LowPric not LwPric
+        "ClsgPric":          "close",      # note: ClsgPric not ClsPric
+        "LastPric":          "last",
+        "SttlmPric":         "settle",
+        "TtlTradgVol":       "contracts",  # total trading volume
+        "OpnIntrst":         "oi",
+        "ChngInOpnIntrst":   "oi_chg",
+        "TtlTrfVal":         "trade_value",
+        "TradDt":            "trade_date",
     })
 
 

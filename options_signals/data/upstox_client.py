@@ -107,7 +107,7 @@ class UpstoxClient:
         to_date: str,
     ) -> List[List]:
         """
-        Fetch OHLCV candles.
+        Fetch OHLCV candles for active instruments.
         interval: '1minute' | '30minute' | 'day' | 'week' | 'month'
         Returns list of [timestamp, open, high, low, close, volume, oi] rows.
         """
@@ -116,6 +116,31 @@ class UpstoxClient:
         data = _get(path, self._token)
         candles = data.get("candles", []) if isinstance(data, dict) else []
         if len(candles) < 5:
-            # Upstox returns 200 with empty candles for instruments with no history
             return []
         return candles
+
+    def get_expired_instrument_candles(
+        self,
+        expired_instrument_key: str,
+        interval: str,
+        from_date: str,
+        to_date: str,
+    ) -> List[List]:
+        """
+        Fetch OHLCV candles for EXPIRED options/futures contracts.
+        Requires Upstox Plus plan (UPSTOX_PLUS=true in .env).
+
+        expired_instrument_key: e.g. 'NSE_FO|68065' (key for a past expiry strike)
+        interval: '1minute' | '3minute' | '5minute' | '15minute' | '30minute' | 'day'
+        Returns list of [timestamp, open, high, low, close, volume, oi] rows.
+        """
+        import os
+        if not os.getenv("UPSTOX_PLUS", "false").lower() == "true":
+            raise UpstoxAPIError(
+                "Expired instrument historical data requires Upstox Plus plan. "
+                "Set UPSTOX_PLUS=true in .env after upgrading."
+            )
+        encoded_key = expired_instrument_key.replace("|", "%7C")
+        path = f"/v2/expired-instruments/historical-candle/{encoded_key}/{interval}/{to_date}/{from_date}"
+        data = _get(path, self._token)
+        return data.get("candles", []) if isinstance(data, dict) else []
