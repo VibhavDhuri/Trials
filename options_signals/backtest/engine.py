@@ -1,14 +1,17 @@
 """
-Simplified signal-replay backtest.
+Signal-replay backtest engine.
 
-IMPORTANT LIMITATIONS — read before using results:
-1. No actual historical options prices are used. Option premiums are estimated
-   from Black-Scholes using 20-day rolling HV as an IV proxy.
-2. HV is structurally LOWER than IV (volatility risk premium averages 3-5% in
-   Indian markets). This biases premium-selling backtests optimistically.
+Two data modes:
+  REAL   — uses actual NSE bhav copy settlement prices (downloaded automatically).
+            Available when internet access to nsearchives.nseindia.com is possible.
+  ESTIMATED — falls back to Black-Scholes with 20-day rolling HV × 1.25 (VRP adj.)
+              when bhav data is unavailable. Results are INDICATIVE ONLY.
+
+IMPORTANT LIMITATIONS in ESTIMATED mode:
+1. No actual historical options prices — premiums from Black-Scholes + HV proxy.
+2. HV × 1.25 partially corrects the volatility risk premium but is still approximate.
 3. P&L is gross — no STT, brokerage, or slippage.
 4. Entry/exit timing is simulated (open next day / close at expiry).
-Results are INDICATIVE ONLY and should not be used to evaluate real strategies.
 """
 from __future__ import annotations
 
