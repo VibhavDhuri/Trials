@@ -120,17 +120,21 @@ def get_all_positions() -> List[Position]:
     return load_positions()
 
 
-def portfolio_greeks(open_positions: List[Position], chain_lookup: Dict) -> Dict:
+def portfolio_greeks(open_positions: List[Position], chain_lookup: Optional[Dict] = None) -> Dict:
     """
     Sum delta, gamma, theta across all open positions.
-    chain_lookup: dict mapping (symbol, expiry, strike, opt_type) → greek values dict
+    chain_lookup: optional dict mapping (symbol, expiry, strike, opt_type) → greek values dict.
     Portfolio Greeks are signed by position direction (BUY=+1, SELL=-1).
+    Returns zero dict when chain_lookup is not provided.
     """
     total = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+    if not chain_lookup:
+        return total
     for p in open_positions:
         key = (p.symbol, p.expiry, p.strike, p.opt_type)
         greeks = chain_lookup.get(key, {})
-        lot = INDICES[p.symbol].lot_size
+        cfg = INDICES.get(p.symbol)
+        lot = cfg.lot_size if cfg else 1
         sign = _direction(p.action)
         for g in ("delta", "gamma", "theta", "vega"):
             total[g] += greeks.get(g, 0.0) * p.quantity * lot * sign

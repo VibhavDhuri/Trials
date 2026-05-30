@@ -128,9 +128,27 @@ def _fetch_one(ticker: str, client: Optional[UpstoxClient]) -> Optional[StockRes
             atm_iv_pe = float((atm.get("put_options")  or {}).get("option_greeks", {}).get("iv", 0) or 0)
             atm_iv = (atm_iv_ce + atm_iv_pe) / 2 if (atm_iv_ce + atm_iv_pe) > 0 else 0
 
-            # IV rank proxy: compare ATM IV vs stock baseline × 100 (rough)
-            baseline = info["baseline_iv"] * 100
-            iv_rank_approx = min(atm_iv / (baseline * 1.5) * 100, 100) if baseline > 0 else 50
+            # IV rank from rolling observed ATM IV history (persisted per ticker).
+            # Falls back to baseline proxy until ≥10 observations are accumulated.
+            import datetime as _dt
+            from store.local_store import load as _load, save as _save
+            obs_key = f"iv_obs_{ticker}"
+            history = _load(obs_key, [])
+            if atm_iv > 0:
+                history.append({"iv": atm_iv, "ts": _dt.datetime.utcnow().isoformat()})
+                history = history[-120:]   # keep ~120 observations (≈4 months at daily scan)
+                _save(obs_key, history)
+            ivs = [h["iv"] for h in history if h.get("iv", 0) > 0]
+            if len(ivs) >= 10:
+                iv_min, iv_max = min(ivs), max(ivs)
+                iv_rank_approx = float(
+                    (atm_iv - iv_min) / (iv_max - iv_min) * 100
+                    if iv_max > iv_min else 50.0
+                )
+            else:
+                # Baseline proxy while history builds up
+                baseline = info["baseline_iv"] * 100
+                iv_rank_approx = min(atm_iv / (baseline * 1.5) * 100, 100) if baseline > 0 else 50
 
             # Simple signal from PCR
             if pcr > 1.4:

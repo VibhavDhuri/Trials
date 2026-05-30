@@ -26,7 +26,7 @@ from analysis.strategy_advisor import build_strategy_details
 from alerts.alert_engine import (
     MarketSnapshot, check_alerts, load_rules, add_rule, remove_rule, ConditionType
 )
-from alerts.notifiers import LogFileNotifier
+from alerts.notifiers import build_notifiers
 from utils.helpers import is_market_open, market_status, now_ist, format_inr, dte_label
 
 st.set_page_config(page_title="Signals", page_icon="📊", layout="wide")
@@ -138,7 +138,8 @@ snapshot = MarketSnapshot(
 )
 fired = check_alerts(snapshot)
 if fired:
-    LogFileNotifier().notify(fired)
+    for _n in build_notifiers():
+        _n.notify(fired)
     for r in fired:
         st.warning(f"🔔 **ALERT FIRED:** {r.label}  (value: {r.last_value:.2f})")
 

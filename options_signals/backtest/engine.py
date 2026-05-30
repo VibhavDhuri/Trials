@@ -129,8 +129,10 @@ def run_backtest(
 
     for i in range(22, len(closes) - 1):
         spot = closes[i]
-        iv   = hv_arr[i] if not np.isnan(hv_arr[i]) else 0.15
-        iv   = max(iv, 0.05)
+        # Apply 25% VRP (volatility risk premium) adjustment: markets price options
+        # ~20-30% above realised HV on average. This corrects the systematic bias.
+        raw_hv = hv_arr[i] if not np.isnan(hv_arr[i]) else 0.15
+        iv     = max(raw_hv * 1.25, 0.06)
         prev_spot = closes[i - 5] if i >= 5 else closes[0]
 
         direction = _simple_signal(spot, iv, prev_spot)
@@ -159,6 +161,7 @@ def run_backtest(
                     ep = ep_ce + ep_pe
 
                 if ep > 0:
+                    ep = ep * 1.01   # simulate paying the offer (1% bid-ask half-spread)
                     in_trade     = True
                     entry_price  = ep
                     entry_date   = dates[i + 1]
@@ -187,6 +190,7 @@ def run_backtest(
             hold_expired = days_held >= days_to_hold
 
             if stop_hit or hold_expired:
+                curr_p = curr_p * 0.99   # simulate receiving the bid (1% half-spread)
                 pnl = (curr_p - entry_price) * lot
                 trades.append({
                     "entry_date":  entry_date,

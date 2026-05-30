@@ -117,33 +117,62 @@ def run_once(symbol: str, mdf: MarketDataFetcher, ocf: OptionsChainFetcher) -> N
                 log.info("Already have open %s %s position — skipping", symbol, direction)
                 continue
 
-            # Pick the ATM option for the signalled direction
             opt_type = "CE" if direction == "BULLISH" else "PE"
-            leg = chain_df[
-                (chain_df["opt_type"] == opt_type) &
-                (chain_df["atm_distance"] == chain_df[chain_df["opt_type"] == opt_type]["atm_distance"].min())
-            ]
-            if leg.empty:
+            cfg      = INDICES[symbol]
+            gap      = cfg.strike_gap
+
+            # Find ATM option rows for this type
+            side_df = chain_df[chain_df["opt_type"] == opt_type].copy()
+            if side_df.empty:
+                continue
+            side_df = side_df.sort_values("atm_distance")
+
+            atm_row = side_df.iloc[0]
+            atm_strike = float(atm_row["strike"])
+            atm_ltp    = float(atm_row["ltp"])
+            if atm_ltp <= 0:
                 continue
 
-            row = leg.iloc[0]
-            ltp = float(row["ltp"])
-            if ltp <= 0:
-                continue
+            # OTM strike one gap away from ATM (short leg of spread)
+            otm_strike = atm_strike + gap if direction == "BULLISH" else atm_strike - gap
+            otm_rows = side_df[abs(side_df["strike"] - otm_strike) < gap * 0.6]
 
-            pos = place_bot_trade(
-                symbol=symbol,
-                expiry=exp,
-                strike=float(row["strike"]),
-                opt_type=opt_type,
-                action="BUY",
-                ltp=ltp,
-                strategy_tag=sig.strategy,
-            )
-            log.info(
-                "BOT TRADE: %s %s %s@%.2f exp=%s strategy=%s",
-                symbol, opt_type, int(row["strike"]), ltp, exp, sig.strategy,
-            )
+            if not otm_rows.empty:
+                # Place a vertical spread: buy ATM, sell OTM
+                otm_ltp = float(otm_rows.iloc[0]["ltp"])
+                strategy_label = (
+                    "Bull Call Spread" if direction == "BULLISH" else "Bear Put Spread"
+                )
+                place_bot_trade(
+                    symbol=symbol, expiry=exp,
+                    strike=atm_strike, opt_type=opt_type,
+                    action="BUY", ltp=atm_ltp,
+                    strategy_tag=strategy_label,
+                )
+                if otm_ltp > 0:
+                    place_bot_trade(
+                        symbol=symbol, expiry=exp,
+                        strike=otm_strike, opt_type=opt_type,
+                        action="SELL", ltp=otm_ltp,
+                        strategy_tag=strategy_label,
+                    )
+                log.info(
+                    "BOT SPREAD: %s %s BUY %d@%.2f / SELL %d@%.2f  net=%.2f  exp=%s",
+                    symbol, opt_type, int(atm_strike), atm_ltp,
+                    int(otm_strike), otm_ltp, atm_ltp - otm_ltp, exp,
+                )
+            else:
+                # No OTM available — fall back to naked long option
+                place_bot_trade(
+                    symbol=symbol, expiry=exp,
+                    strike=atm_strike, opt_type=opt_type,
+                    action="BUY", ltp=atm_ltp,
+                    strategy_tag=sig.strategy,
+                )
+                log.info(
+                    "BOT TRADE: %s %s %s@%.2f exp=%s strategy=%s",
+                    symbol, opt_type, int(atm_strike), atm_ltp, exp, sig.strategy,
+                )
 
     # Check exits
     exits = check_and_exit_positions(all_prices)
