@@ -134,18 +134,22 @@ def install_deps(venv_path: Path) -> None:
     _step("3/5  Installing dependencies")
 
     if platform.system() == "Windows":
-        pip = str(venv_path / "Scripts" / "pip.exe")
+        venv_python = str(venv_path / "Scripts" / "python.exe")
     else:
-        pip = str(venv_path / "bin" / "pip")
+        venv_python = str(venv_path / "bin" / "python")
 
-    # Upgrade pip silently
-    subprocess.run([pip, "install", "--upgrade", "pip", "-q"], check=True)
+    # Always upgrade pip via 'python -m pip' — works on Windows where
+    # calling pip.exe directly causes a file-lock error.
+    subprocess.run(
+        [venv_python, "-m", "pip", "install", "--upgrade", "pip", "-q"],
+        check=True
+    )
     _ok("pip upgraded")
 
     # Install requirements
-    print(f"  Installing packages from requirements.txt …", end="", flush=True)
+    print("  Installing packages from requirements.txt …", end="", flush=True)
     subprocess.run(
-        [pip, "install", "-r", str(REQ_FILE), "-q"],
+        [venv_python, "-m", "pip", "install", "-r", str(REQ_FILE), "-q"],
         check=True
     )
     print(" done")
@@ -154,7 +158,7 @@ def install_deps(venv_path: Path) -> None:
     # Optional: websocket-client for live streaming
     try:
         subprocess.run(
-            [pip, "install", "websocket-client", "-q"],
+            [venv_python, "-m", "pip", "install", "websocket-client", "-q"],
             check=True, capture_output=True
         )
         _ok("websocket-client installed (WebSocket live feed enabled)")
