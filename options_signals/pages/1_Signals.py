@@ -55,6 +55,18 @@ try:
 except ImportError:
     _HAS_FII = False
 
+try:
+    from data.vix_history import get_vix_history, vix_history_fig
+    _HAS_VIX_HISTORY = True
+except ImportError:
+    _HAS_VIX_HISTORY = False
+
+try:
+    from analysis.options_flow import detect_flow_signals, flow_summary, flow_table_fig
+    _HAS_FLOW = True
+except ImportError:
+    _HAS_FLOW = False
+
 st.set_page_config(page_title="Signals", page_icon="📊", layout="wide")
 
 _refresh_ms = 30_000 if is_market_open() else 120_000
@@ -208,6 +220,20 @@ if _HAS_VIX:
             </div>""",
             unsafe_allow_html=True,
         )
+    except Exception:
+        pass
+
+# ── VIX 30-day history chart ──────────────────────────────────────────────────
+if _HAS_VIX_HISTORY:
+    try:
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def _load_vix_history(_offline):
+            return get_vix_history(None if _offline else st.session_state.get("client"))
+        _vhist = _load_vix_history(offline)
+        if _vhist:
+            with st.expander("📉 India VIX — 30-Day History", expanded=False):
+                _vhist_fig = vix_history_fig(_vhist)
+                st.plotly_chart(_vhist_fig, use_container_width=True)
     except Exception:
         pass
 
@@ -537,6 +563,24 @@ if _HAS_FII:
             st.caption(f"📋 {interpret_fii(fii)}  |  Source: {fii.source}  |  Date: {fii.date}")
         except Exception as _e:
             st.caption(f"FII/DII data unavailable: {_e}")
+
+# ── Options Flow / Unusual OI Activity ───────────────────────────────────────
+if _HAS_FLOW and not chain_df.empty:
+    with st.expander("🌊 Options Flow & Unusual OI Activity"):
+        try:
+            flow_signals = detect_flow_signals(chain_df, top_n=10)
+            fsumm = flow_summary(flow_signals)
+            _fa, _fb, _fc = st.columns(3)
+            _fa.metric("Bullish Flow Signals", fsumm["bullish_count"])
+            _fb.metric("Bearish Flow Signals", fsumm["bearish_count"])
+            _fc.metric("Net Bias", fsumm["net_bias"])
+            if flow_signals:
+                ftab = flow_table_fig(flow_signals)
+                st.plotly_chart(ftab, use_container_width=True)
+            else:
+                st.info("No unusual flow detected in current chain data.")
+        except Exception as _fe:
+            st.caption(f"Options flow unavailable: {_fe}")
 
 st.divider()
 st.caption("⚠️ Informational only. Not financial advice. Options trading involves significant risk.")

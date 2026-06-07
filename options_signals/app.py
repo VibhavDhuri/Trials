@@ -95,6 +95,19 @@ with st.sidebar:
     except ImportError:
         pass
 
+    # ── WebSocket streaming status ─────────────────────────────────────────────
+    try:
+        from data.ws_client import streaming_status
+        _ws_stat = streaming_status()
+        _ws_col = {"CONNECTED": "green", "STALE": "orange"}.get(_ws_stat, "gray")
+        st.markdown(
+            f"<span style='color:{_ws_col}'>{'🔴' if _ws_col=='gray' else '🟢'} "
+            f"WS Stream: **{_ws_stat}**</span>",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
     st.divider()
     st.caption(f"IST: {now_ist().strftime('%d %b %Y  %H:%M:%S')}")
     st.caption("Auto-refreshes every 30s during market hours.")
@@ -121,6 +134,8 @@ pages = [
     ("📅", "Calendar",          "Economic & events calendar — RBI, Fed, expiry, earnings dates"),
     ("📓", "Journal",           "Trade journal — notes, tags, conviction, mood per trade"),
     ("📊", "Performance",       "Equity curve, Sharpe, Sortino, monthly P&L heatmap, drawdown"),
+    ("⚡", "Gamma Scalping",    "Delta-hedging session tracker for long-gamma positions"),
+    ("🕐", "Scheduler",         "Conditional & time-based strategy auto-execution"),
 ]
 
 cols = st.columns(2)
