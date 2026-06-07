@@ -45,6 +45,24 @@ scan_btn = col2.button("Scan Now", type="primary", use_container_width=True)
 if offline:
     st.info("**Offline mode** — showing sample scanner results (randomized seed per stock).")
 
+# ── Sector Heatmap ────────────────────────────────────────────────────────────
+try:
+    from scanner.sector_data import fetch_sector_performance, sector_heatmap_fig
+    _HAS_SECTOR = True
+except ImportError:
+    _HAS_SECTOR = False
+
+if _HAS_SECTOR:
+    with st.expander("🗺 Sector Performance Heatmap", expanded=True):
+        @st.cache_data(ttl=120, show_spinner=False)
+        def _load_sectors(_offline):
+            return fetch_sector_performance(None if _offline else client)
+        try:
+            sect_data = _load_sectors(offline)
+            st.plotly_chart(sector_heatmap_fig(sect_data), use_container_width=True)
+        except Exception as _se:
+            st.caption(f"Sector data unavailable: {_se}")
+
 # ── Run scan ──────────────────────────────────────────────────────────────────
 if scan_btn or "scanner_results" not in st.session_state:
     with st.spinner("Scanning 30 F&O stocks… (this may take 10-15 seconds in live mode)"):

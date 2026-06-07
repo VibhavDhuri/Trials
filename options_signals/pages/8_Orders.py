@@ -158,4 +158,72 @@ if open_filtered:
                 st.rerun()
 
 st.divider()
+
+# ── GTT Exit Orders ───────────────────────────────────────────────────────────
+try:
+    from broker.gtt_manager import GTTManager
+    _HAS_GTT = True
+except ImportError:
+    _HAS_GTT = False
+
+if _HAS_GTT and open_filtered:
+    with st.expander("⚡ Set GTT Exit Orders (Good Till Triggered)"):
+        st.caption("Place target + stop-loss orders that persist until triggered. Paper mode stores GTTs locally.")
+        _token = getattr(client, "_token", "") if client else ""
+        _gtt_mgr = GTTManager(_token) if _token else GTTManager("")
+        for p in open_filtered:
+            st.markdown(f"**{p.symbol} {p.opt_type} {int(p.strike)} exp:{p.expiry}** — Entry ₹{p.entry_price:.2f}")
+            _g1, _g2, _g3 = st.columns(3)
+            _tgt_px  = _g1.number_input("Target ₹", 0.01, 99999.0, float(p.entry_price * 1.5), step=0.5, key=f"gtt_tgt_{p.id}")
+            _sl_px   = _g2.number_input("Stop ₹",   0.01, 99999.0, float(p.entry_price * 0.5), step=0.5, key=f"gtt_sl_{p.id}")
+            _exit_tx = "SELL" if p.action == "BUY" else "BUY"
+            if _g3.button("Place GTT", key=f"gtt_place_{p.id}", type="primary"):
+                try:
+                    from config import INDICES as _IDX
+                    _ikey = f"NSE_FO|{p.symbol}_{p.expiry}_{int(p.strike)}_{p.opt_type}"
+                    _lot  = _IDX[p.symbol].lot_size if p.symbol in _IDX else 75
+                    _gtt_order = _gtt_mgr.place_gtt(
+                        instrument_key=_ikey,
+                        trigger_price=_tgt_px,
+                        limit_price=_tgt_px,
+                        qty=p.quantity * _lot,
+                        transaction_type=_exit_tx,
+                        position_id=p.id,
+                    )
+                    st.success(f"GTT placed — target ₹{_tgt_px:.2f}  |  ID: {_gtt_order.id[:8]}")
+                except Exception as _ge:
+                    st.error(f"GTT failed: {_ge}")
+            _existing = _gtt_mgr.list_gtts(position_id=p.id)
+            if _existing:
+                for _g in _existing:
+                    st.caption(f"  → GTT {_g.id[:8]}: {_g.status} @ ₹{_g.trigger_price:.2f}")
+
+st.divider()
+
+# ── Tax P&L Report ────────────────────────────────────────────────────────────
+with st.expander("🧾 Tax P&L Report"):
+    st.caption("Simplified P&L statement for ITR-3 filing. F&O income = business income under Section 43(5).")
+    try:
+        from reports.tax_report import generate_tax_report, to_csv
+        _fy = st.selectbox("Financial Year", ["2025-26", "2024-25"], key="tax_fy")
+        if st.button("Generate Report", key="gen_tax"):
+            _all_pos = get_all_positions()
+            _df_tax, _summary = generate_tax_report(_all_pos, _fy)
+            if _df_tax.empty:
+                st.info(f"No closed trades in FY {_fy}.")
+            else:
+                _t1, _t2, _t3, _t4 = st.columns(4)
+                _t1.metric("Turnover", f"₹{_summary['turnover']:,.0f}")
+                _t2.metric("Gross P&L", f"₹{_summary['gross_pnl']:+,.0f}")
+                _t3.metric("STT Est.", f"₹{_summary['stt_total']:,.0f}")
+                _t4.metric("Net P&L", f"₹{_summary['net_pnl']:+,.0f}")
+                st.dataframe(_df_tax, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "⬇ Download CSV", to_csv(_df_tax),
+                    file_name=f"FO_PnL_{_fy}.csv", mime="text/csv",
+                )
+                st.caption("⚠️ STT estimate applies 0.125% to settlement value — actual STT depends on exercise vs squaring off. Consult your CA.")
+    except ImportError:
+        st.caption("Tax report module not yet installed.")
+
 st.caption("⚠️  P&L is gross — excludes brokerage, STT (0.125% on exercise), and exchange charges.")

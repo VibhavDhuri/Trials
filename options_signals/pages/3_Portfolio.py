@@ -186,6 +186,40 @@ else:
 
     st.divider()
 
+    # ── Auto-exit rules ───────────────────────────────────────────────────────
+    try:
+        from positions.auto_exit import add_rule as _add_exit, load_rules as _load_exits, cancel_rule as _cancel_exit
+        _HAS_AUTOEXIT = True
+    except ImportError:
+        _HAS_AUTOEXIT = False
+
+    if _HAS_AUTOEXIT:
+        with st.expander("🎯 Auto-Exit Rules"):
+            st.caption("Set automatic stop-loss and target exits. Run `python positions/run_watcher.py` in the background to activate.")
+            _all_rules = _load_exits()
+            _active_map = {r.position_id: r for r in _all_rules if r.status == "ACTIVE"}
+            for p in positions:
+                _rule = _active_map.get(p.id)
+                _lbl = f"{p.symbol} {p.opt_type} {int(p.strike)} [{p.id[:8]}]"
+                if _rule:
+                    _ra, _rb = st.columns([4, 1])
+                    _ra.caption(f"✅ {_lbl} — target +{_rule.target_pct:.0f}% | stop -{_rule.stop_loss_pct:.0f}% {'(trailing)' if _rule.trailing_stop else ''}")
+                    if _rb.button("Remove", key=f"rm_ae_{p.id}"):
+                        _cancel_exit(_rule.id)
+                        st.rerun()
+                else:
+                    _ea, _eb, _ec, _ed = st.columns([2, 2, 1, 1])
+                    _tgt   = _ea.number_input("Target % profit", 5.0, 500.0, 40.0, key=f"tgt_{p.id}")
+                    _sl    = _eb.number_input("Stop loss %", 5.0, 100.0, 50.0, key=f"sl_{p.id}")
+                    _trail = _ec.checkbox("Trailing SL", key=f"tr_{p.id}")
+                    _ec.caption(_lbl)
+                    if _ed.button("Set", key=f"set_ae_{p.id}", type="primary"):
+                        _add_exit(p.id, float(_tgt), float(_sl), bool(_trail))
+                        st.success(f"Auto-exit set for {_lbl}")
+                        st.rerun()
+
+    st.divider()
+
     # ── Close position ────────────────────────────────────────────────────────
     st.subheader("Close a Position")
     pos_ids = {f"{p.symbol} {p.opt_type} {int(p.strike)} exp:{p.expiry} (ID:{p.id[:8]})": p.id

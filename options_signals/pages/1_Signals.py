@@ -30,6 +30,31 @@ from alerts.notifiers import build_notifiers
 from utils.helpers import is_market_open, market_status, now_ist, format_inr, dte_label
 from broker.order_manager import execute_paper_or_live, is_live_trading_enabled, OrderManager
 
+# New feature modules (imported lazily to keep startup fast)
+try:
+    from data.vix_data import get_vix, interpret_vix, expected_daily_move_pct
+    _HAS_VIX = True
+except ImportError:
+    _HAS_VIX = False
+
+try:
+    from analysis.vol_surface import compute_term_structure, term_structure_fig, hv_cone_fig, compute_hv_cone, vol_surface_fig
+    _HAS_VOLSURFACE = True
+except ImportError:
+    _HAS_VOLSURFACE = False
+
+try:
+    from data.rollover import compute_rollover, get_sample_rollover
+    _HAS_ROLLOVER = True
+except ImportError:
+    _HAS_ROLLOVER = False
+
+try:
+    from data.fii_dii import get_fii_data, interpret_fii
+    _HAS_FII = True
+except ImportError:
+    _HAS_FII = False
+
 st.set_page_config(page_title="Signals", page_icon="📊", layout="wide")
 
 _refresh_ms = 30_000 if is_market_open() else 120_000
@@ -161,6 +186,30 @@ c2.metric("IV Rank",   f"{iv_env.iv_rank:.0f}/100")
 c3.metric("ATM IV",    f"{iv_env.atm_iv*100:.1f}%")
 c4.metric("PCR",       f"{oi_res.pcr_oi:.2f}")
 c5.caption(f"Updated: **{last_upd}**" + ("  🟡 OFFLINE" if offline else ""))
+
+# ── India VIX strip ───────────────────────────────────────────────────────────
+if _HAS_VIX:
+    try:
+        @st.cache_data(ttl=60, show_spinner=False)
+        def _load_vix(_offline):
+            return get_vix(None if _offline else st.session_state.get("client"))
+        vix_data = _load_vix(offline)
+        _vix_regime, _vix_col = interpret_vix(vix_data.current)
+        _daily_move = expected_daily_move_pct(vix_data.current)
+        _vix_sign = "+" if vix_data.day_change_pct >= 0 else ""
+        st.markdown(
+            f"""<div style="background:#1a1a2e;border-radius:8px;padding:8px 16px;margin-bottom:8px;display:flex;gap:32px;align-items:center">
+            <span>🌡 <b>India VIX</b></span>
+            <span style="font-size:1.3em;color:{_vix_col}"><b>{vix_data.current:.2f}</b></span>
+            <span style="color:{_vix_col}">{_vix_sign}{vix_data.day_change_pct:.2f}% today</span>
+            <span style="color:#aaa">Regime: <b>{_vix_regime}</b></span>
+            <span style="color:#aaa">Expected daily ±move: <b>{_daily_move:.2f}%</b></span>
+            <span style="color:#555;font-size:0.85em">52w: {vix_data.week_low:.1f} – {vix_data.week_high:.1f}</span>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
 
 st.divider()
 
@@ -350,6 +399,27 @@ if not chain_df.empty:
         if oi_res.support_levels:   st.markdown(f"**Support:** {', '.join(str(int(s)) for s in oi_res.support_levels[:3])}")
         if oi_res.resistance_levels: st.markdown(f"**Resistance:** {', '.join(str(int(r)) for r in oi_res.resistance_levels[:3])}")
 
+# ── Rollover Analysis ─────────────────────────────────────────────────────────
+if _HAS_ROLLOVER and len(expiries) >= 2:
+    with st.expander("📊 Rollover Analysis"):
+        try:
+            @st.cache_data(ttl=120, show_spinner=False)
+            def _load_rollover(sym, exp1, exp2, sp, _offline):
+                ocf = OptionsChainFetcher(st.session_state.get("client"), _offline)
+                df1 = ocf.get_chain_df(sym, exp1, sp)
+                df2 = ocf.get_chain_df(sym, exp2, sp)
+                if df1.empty or df2.empty:
+                    return get_sample_rollover(exp1, exp2)
+                return compute_rollover(df1, df2, sp, cfg.strike_gap)
+            rv = _load_rollover(symbol, selected_expiry, expiries[min(1, len(expiries)-1)], spot, offline)
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("Rollover %", f"{rv.rollover_pct:.1f}%")
+            rc2.metric("IV Cost (pp)", f"{rv.iv_cost_pp:+.2f}")
+            rc3.metric("Next Expiry", rv.next_expiry)
+            st.caption(rv.interpretation)
+        except Exception as _e:
+            st.caption(f"Rollover data unavailable: {_e}")
+
 st.divider()
 
 # ── IV Analysis ───────────────────────────────────────────────────────────────
@@ -382,6 +452,52 @@ if not chain_df.empty:
         st.metric("IV/HV Ratio", f"{iv_env.iv_vs_hv:.2f}x"   if iv_env.iv_vs_hv else "N/A")
         st.metric("Put Skew",    f"{iv_env.skew*100:+.1f}%")
 
+# ── Volatility Structure ──────────────────────────────────────────────────────
+if _HAS_VOLSURFACE:
+    with st.expander("📈 Volatility Term Structure & HV Cone"):
+        try:
+            @st.cache_data(ttl=120, show_spinner=False)
+            def _load_chains_for_structure(sym, exps, sp, _offline):
+                ocf = OptionsChainFetcher(st.session_state.get("client"), _offline)
+                out = {}
+                for e in exps[:6]:
+                    df = ocf.get_chain_df(sym, e, sp)
+                    if not df.empty:
+                        out[e] = df
+                return out
+            chains_map = _load_chains_for_structure(symbol, expiries, spot, offline)
+            if len(chains_map) >= 2:
+                vs_col1, vs_col2 = st.columns(2)
+                pts = compute_term_structure(chains_map, spot)
+                with vs_col1:
+                    st.plotly_chart(term_structure_fig(pts), use_container_width=True)
+                with vs_col2:
+                    hist_data = st.session_state.get("_hist_closes_" + symbol)
+                    if hist_data is None and not offline and client:
+                        try:
+                            import datetime as _dt
+                            from data.market_data import MarketDataFetcher as _MDF
+                            _mdf = _MDF(client, offline=False)
+                            hist_data = _mdf.get_historical_closes(symbol, days=80)
+                            st.session_state["_hist_closes_" + symbol] = hist_data
+                        except Exception:
+                            hist_data = None
+                    hv_dict = compute_hv_cone(hist_data) if hist_data is not None and len(hist_data) > 20 else {}
+                    if hv_dict:
+                        st.plotly_chart(hv_cone_fig(hv_dict, iv_env.atm_iv * 100), use_container_width=True)
+                    else:
+                        st.caption("HV Cone requires historical closes — available in live mode.")
+                st.caption("Vol Surface (3D)")
+                try:
+                    vs_fig = vol_surface_fig(chains_map, spot)
+                    st.plotly_chart(vs_fig, use_container_width=True)
+                except Exception:
+                    pass
+            else:
+                st.caption("Term structure requires data for ≥2 expiries.")
+        except Exception as _e:
+            st.caption(f"Vol structure unavailable: {_e}")
+
 st.divider()
 
 # ── Greeks Heatmap ────────────────────────────────────────────────────────────
@@ -399,6 +515,28 @@ if not chain_df.empty:
             fig.add_vline(x=spot, line_dash="dash", line_color="white")
             fig.update_layout(template="plotly_dark", height=260, title=greek.capitalize())
             st.plotly_chart(fig, use_container_width=True)
+
+# ── Institutional Positioning (FII/DII) ──────────────────────────────────────
+if _HAS_FII:
+    with st.expander("🏦 Institutional Positioning (FII/DII)"):
+        try:
+            @st.cache_data(ttl=1800, show_spinner=False)
+            def _load_fii():
+                return get_fii_data()
+            fii = _load_fii()
+            fi1, fi2, fi3, fi4 = st.columns(4)
+            arrow = lambda v: "↑" if v > 0 else "↓"
+            fi1.metric("FII Net Futures", f"{arrow(fii.fii_net_futures)} {abs(fii.fii_net_futures):,.0f}",
+                       delta_color="normal" if fii.fii_net_futures > 0 else "inverse")
+            fi2.metric("FII Net Calls", f"{arrow(fii.fii_net_calls)} {abs(fii.fii_net_calls):,.0f}",
+                       delta_color="normal" if fii.fii_net_calls > 0 else "inverse")
+            fi3.metric("FII Net Puts", f"{arrow(fii.fii_net_puts)} {abs(fii.fii_net_puts):,.0f}",
+                       delta_color="normal" if fii.fii_net_puts > 0 else "inverse")
+            fi4.metric("DII Net Futures", f"{arrow(fii.dii_net_futures)} {abs(fii.dii_net_futures):,.0f}",
+                       delta_color="normal" if fii.dii_net_futures > 0 else "inverse")
+            st.caption(f"📋 {interpret_fii(fii)}  |  Source: {fii.source}  |  Date: {fii.date}")
+        except Exception as _e:
+            st.caption(f"FII/DII data unavailable: {_e}")
 
 st.divider()
 st.caption("⚠️ Informational only. Not financial advice. Options trading involves significant risk.")

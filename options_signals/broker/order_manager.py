@@ -95,6 +95,43 @@ class OrderManager:
         return resp.status_code == 200
 
 
+def get_span_margin(legs: list, token: str) -> float:
+    """
+    Fetch real SPAN margin from Upstox margin API.
+    Falls back to rough proxy (3× short premiums × lot_size) on any error.
+
+    legs: list of dicts with keys: instrument_key, quantity, transaction_type, price, lot_size
+    """
+    try:
+        _throttle()
+        url = f"{UPSTOX_API_BASE}/charges/margin"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        instruments = [
+            {
+                "instrument_token": leg["instrument_key"],
+                "quantity": leg["quantity"] * leg.get("lot_size", 75),
+                "transaction_type": leg["transaction_type"],
+                "product": "I",
+            }
+            for leg in legs
+        ]
+        resp = requests.post(url, json={"instruments": instruments}, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json().get("data", {})
+            return float(data.get("required_margin", 0) or 0)
+    except Exception:
+        pass
+    # Fallback: rough proxy
+    return sum(
+        leg.get("price", 0) * leg.get("quantity", 1) * leg.get("lot_size", 75) * 3
+        for leg in legs if leg.get("transaction_type") == "SELL"
+    )
+
+
 def execute_paper_or_live(
     manager: Optional[OrderManager],
     instrument_key: str,

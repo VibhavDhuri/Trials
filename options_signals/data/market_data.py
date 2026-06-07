@@ -9,6 +9,8 @@ from typing import Dict, Optional, Tuple
 
 import numpy as np
 
+import pandas as pd
+
 from config import INDICES
 from data.upstox_client import UpstoxClient, UpstoxAuthError, UpstoxAPIError
 from data.sample_data import get_sample_market_quote, get_sample_historical_iv
@@ -80,3 +82,30 @@ class MarketDataFetcher:
             return get_sample_historical_iv()
 
         return max(rolling_hvs), min(rolling_hvs)
+
+    def get_historical_closes(self, symbol: str, days: int = 80) -> Optional[pd.Series]:
+        """
+        Return a pd.Series of daily close prices (most recent last) for HV cone computation.
+        Returns None on failure or in offline mode.
+        """
+        if self._offline or self._client is None:
+            return None
+        cfg = INDICES.get(symbol)
+        if cfg is None:
+            return None
+        today = datetime.date.today()
+        from_date = (today - datetime.timedelta(days=days + 30)).strftime("%Y-%m-%d")
+        to_date = today.strftime("%Y-%m-%d")
+        try:
+            candles = self._client.get_historical_candles(
+                cfg.instrument_key, "day", from_date, to_date
+            )
+            if len(candles) < 10:
+                return None
+            closes = pd.Series(
+                [float(c[4]) for c in candles],
+                index=pd.to_datetime([c[0][:10] for c in candles]),
+            ).sort_index()
+            return closes
+        except (UpstoxAuthError, UpstoxAPIError):
+            return None

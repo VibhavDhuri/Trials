@@ -170,6 +170,74 @@ with st.container():
 
 st.divider()
 
+# ── Auto-Hedge Advisor ────────────────────────────────────────────────────────
+st.subheader("Portfolio Delta & Auto-Hedge Advisor")
+
+try:
+    from analysis.hedge_advisor import suggest_hedge, portfolio_net_delta, HedgeSuggestion
+    from positions.tracker import get_open_positions as _get_open
+    from data.options_chain import OptionsChainFetcher as _OCF
+    from data.market_data import MarketDataFetcher as _MDF
+    _HAS_HEDGE = True
+except ImportError:
+    _HAS_HEDGE = False
+
+if _HAS_HEDGE:
+    _ope = _get_open()
+    _hedge_threshold = st.slider("Delta hedge threshold (lots-equivalent)", 1.0, 50.0, 10.0, step=1.0,
+                                  help="Suggest a hedge when |net portfolio delta| exceeds this value.")
+    if _ope:
+        _hedge_sym = st.selectbox("Compute delta for", list({p.symbol for p in _ope}), key="hedge_sym")
+        _hedge_exp = st.selectbox("Expiry", sorted({p.expiry for p in _ope if p.symbol == _hedge_sym}), key="hedge_exp")
+
+        @st.cache_data(ttl=60, show_spinner=False)
+        def _load_hedge_chain(sym, exp, _off):
+            import pandas as pd
+            if _off or not st.session_state.get("client"):
+                return pd.DataFrame()
+            _ocf = _OCF(st.session_state.get("client"), offline=False)
+            _mdf = _MDF(st.session_state.get("client"), offline=False)
+            _sp = float(_mdf.get_spot(sym).get("last_price", 22500) or 22500)
+            return _ocf.get_chain_df(sym, exp, _sp), _sp
+
+        _hc_result = _load_hedge_chain(_hedge_sym, _hedge_exp, offline)
+        if isinstance(_hc_result, tuple):
+            _hchain, _hspot = _hc_result
+        else:
+            _hchain, _hspot = _hc_result, 22500.0
+
+        _sug = suggest_hedge(_ope, _hspot, _hchain, threshold=_hedge_threshold)
+        _nd = _sug.net_delta_before
+
+        _hc1, _hc2 = st.columns(2)
+        _hc1.metric("Net Portfolio Delta", f"{_nd:+.2f}", help="Sum of (delta × qty × lot_size × sign) across all open positions")
+        _hc2.metric("Threshold", f"±{_hedge_threshold:.0f}")
+
+        if _sug.needed:
+            st.warning(
+                f"⚠️ **{_sug.reason}**  \n"
+                f"Suggested: {_sug.action} **{_sug.instrument_desc}** × {_sug.quantity} lot(s)  \n"
+                f"Estimated cost: ₹{_sug.estimated_cost_inr:,.0f}  |  Net delta after: {_sug.net_delta_after:+.2f}"
+            )
+            if st.button("Add Hedge to Portfolio", type="primary"):
+                from positions.tracker import add_position as _add_pos
+                _add_pos(
+                    symbol=_hedge_sym, expiry=_hedge_exp,
+                    strike=float(_hspot), opt_type="PE" if _sug.action == "BUY" and _nd > 0 else "CE",
+                    action=_sug.action, quantity=_sug.quantity, entry_price=0.0,
+                    source="MANUAL", strategy_tag="Auto-Hedge",
+                )
+                st.success(f"Hedge added to portfolio. Update entry price in Portfolio page.")
+                st.session_state.pop("portfolio_ltp_map", None)
+        else:
+            st.success(f"✅ {_sug.reason}")
+    else:
+        st.info("No open positions — delta hedging not required.")
+else:
+    st.caption("Auto-hedge advisor module not available.")
+
+st.divider()
+
 # ── Risk guidelines ───────────────────────────────────────────────────────────
 with st.expander("Risk Management Guidelines"):
     st.markdown(f"""

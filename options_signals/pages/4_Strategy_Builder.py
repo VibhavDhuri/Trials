@@ -16,7 +16,7 @@ from config import INDICES, IST
 from positions.builder import Leg, analyse
 from positions.tracker import add_position
 from data.options_chain import OptionsChainFetcher
-from broker.order_manager import execute_paper_or_live, is_live_trading_enabled, OrderManager
+from broker.order_manager import execute_paper_or_live, is_live_trading_enabled, OrderManager, get_span_margin
 from utils.helpers import now_ist
 
 st.set_page_config(page_title="Strategy Builder", page_icon="🔧", layout="wide")
@@ -121,15 +121,36 @@ if st.button("Analyse Strategy", type="primary"):
     g3.metric("Net Theta", f"{result.net_theta:+.4f} /day")
     g4.metric("Net Vega",  f"{result.net_vega:+.4f} /1%IV")
 
-    # Margin estimate
+    # Margin estimate — use real SPAN API if client available, else rough proxy
     lot_size = INDICES[symbol].lot_size
-    margin_est = sum(
-        leg.premium * leg.quantity * lot_size * 3
-        for leg in legs if leg.action == "SELL"
-    )
+    _margin_label = "Rough Proxy"
+    if client and is_live_trading_enabled():
+        try:
+            _span_legs = [
+                {
+                    "instrument_key": f"NSE_FO|{symbol}_{expiry_sel}_{int(leg.strike)}_{leg.opt_type}",
+                    "quantity": leg.quantity,
+                    "transaction_type": leg.action,
+                    "price": leg.premium,
+                    "lot_size": lot_size,
+                }
+                for leg in legs
+            ]
+            margin_est = get_span_margin(_span_legs, getattr(client, "_token", ""))
+            _margin_label = "SPAN (via Upstox)"
+        except Exception:
+            margin_est = sum(
+                leg.premium * leg.quantity * lot_size * 3
+                for leg in legs if leg.action == "SELL"
+            )
+    else:
+        margin_est = sum(
+            leg.premium * leg.quantity * lot_size * 3
+            for leg in legs if leg.action == "SELL"
+        )
     if margin_est > 0:
-        st.info(f"Estimated margin (rough SPAN proxy — 3× short premiums): ₹{margin_est:,.0f}. "
-                "Actual margin requirements may differ significantly. Check with your broker.")
+        st.info(f"Estimated margin ({_margin_label}): ₹{margin_est:,.0f}. "
+                "Actual margin requirements may differ. Verify with your broker.")
 
     # Payoff diagram
     if HAS_PLOTLY and result.payoff_x and result.payoff_y:

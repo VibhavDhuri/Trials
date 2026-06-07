@@ -61,6 +61,41 @@ with st.sidebar:
         st.success("Connected to Upstox")
 
     st.divider()
+
+    # ── Watchlist ─────────────────────────────────────────────────────────────
+    try:
+        from data.watchlist import load_watchlist, fetch_prices, add_to_watchlist, remove_from_watchlist, WatchlistItem
+        @st.cache_data(ttl=30, show_spinner=False)
+        def _wl_prices(_offline):
+            items = load_watchlist()
+            cl = st.session_state.get("client") if not _offline else None
+            return fetch_prices(cl, items), items
+        _wl_data, _wl_items = _wl_prices(is_offline)
+        st.markdown("**Watchlist**")
+        for _wp in _wl_data:
+            _col = "green" if _wp["change_pct"] >= 0 else "red"
+            st.markdown(
+                f"<span style='font-size:0.85em'>{_wp['display_name']}</span>  "
+                f"<b>{_wp['ltp']:,.2f}</b>  "
+                f"<span style='color:{_col}'>{'+' if _wp['change_pct']>=0 else ''}{_wp['change_pct']:.2f}%</span>",
+                unsafe_allow_html=True,
+            )
+        with st.expander("Manage Watchlist"):
+            for _wi in _wl_items:
+                _wa, _wb = st.columns([4, 1])
+                _wa.caption(_wi.display_name)
+                if _wb.button("✕", key=f"wl_rm_{_wi.symbol}"):
+                    remove_from_watchlist(_wi.symbol)
+                    st.rerun()
+            _new_sym = st.text_input("Add symbol (e.g. HDFCBANK)", key="wl_add_sym")
+            _new_key = st.text_input("Instrument key (e.g. NSE_EQ|HDFCBANK)", key="wl_add_key")
+            if st.button("Add") and _new_sym and _new_key:
+                add_to_watchlist(WatchlistItem(_new_sym, _new_key, _new_sym))
+                st.rerun()
+    except ImportError:
+        pass
+
+    st.divider()
     st.caption(f"IST: {now_ist().strftime('%d %b %Y  %H:%M:%S')}")
     st.caption("Auto-refreshes every 30s during market hours.")
 
@@ -79,8 +114,13 @@ pages = [
     ("📈", "Backtest",          "Replay signals on 252 days of historical data (indicative)"),
     ("🔍", "Scanner",           "Scan top 30 F&O stocks for options signals"),
     ("🤖", "Mock Trading",      "Paper trading platform — manual trades + autonomous bot"),
-    ("📋", "Orders",            "Order book — all executed trades by source and strategy"),
-    ("🛡", "Risk",              "Position sizing, daily loss limits, circuit breaker"),
+    ("📋", "Orders",            "Order book — all executed trades by source and strategy, tax report"),
+    ("🛡", "Risk",              "Position sizing, daily loss limits, circuit breaker, delta hedge"),
+    ("🎯", "Scenario",          "Stress-test portfolio — reprice under spot + IV moves"),
+    ("🧮", "Calculator",        "Standalone options pricer, Probability of Profit, break-even table"),
+    ("📅", "Calendar",          "Economic & events calendar — RBI, Fed, expiry, earnings dates"),
+    ("📓", "Journal",           "Trade journal — notes, tags, conviction, mood per trade"),
+    ("📊", "Performance",       "Equity curve, Sharpe, Sortino, monthly P&L heatmap, drawdown"),
 ]
 
 cols = st.columns(2)
