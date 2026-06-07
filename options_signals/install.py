@@ -336,54 +336,108 @@ def create_mac_launcher(venv_path: Path, port: int) -> None:
     print("  After that, double-clicking works every time.")
 
 
+def _windows_desktop() -> Path:
+    """
+    Return the real Desktop path on Windows.
+    OneDrive commonly moves it to ~/OneDrive/Desktop — read the registry
+    to find the authoritative location, then fall back to common guesses.
+    """
+    # Registry is the most reliable source
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+        )
+        desktop_path, _ = winreg.QueryValueEx(key, "Desktop")
+        winreg.CloseKey(key)
+        p = Path(desktop_path)
+        if p.exists():
+            return p
+    except Exception:
+        pass
+
+    # Common fallbacks (covers OneDrive-synced Desktop)
+    home = Path.home()
+    candidates = [
+        home / "Desktop",
+        home / "OneDrive" / "Desktop",
+        Path(os.environ.get("USERPROFILE", str(home))) / "Desktop",
+        Path(os.environ.get("USERPROFILE", str(home))) / "OneDrive" / "Desktop",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+
+    # Nothing found — just use home dir and warn
+    _warn(f"Desktop folder not found — placing shortcut in {home}")
+    return home
+
+
 def create_windows_launcher(venv_path: Path, port: int) -> None:
-    if platform.system() == "Windows":
-        streamlit_cmd = str(venv_path / "Scripts" / "streamlit.exe")
-    else:
-        streamlit_cmd = _resolve_streamlit(venv_path)
+    streamlit_exe = str(venv_path / "Scripts" / "streamlit.exe")
+    python_exe    = str(venv_path / "Scripts" / "python.exe")
 
-    desktop = Path.home() / "Desktop"
-    desktop.mkdir(exist_ok=True)
+    desktop = _windows_desktop()
+    _ok(f"Desktop folder: {desktop}")
 
-    # ── .bat launcher
-    bat_file = desktop / "Options Trading Signals.bat"
-    bat_file.write_text(textwrap.dedent(f"""\
+    # ── 1. launch.bat inside the app folder (terminal version for debugging)
+    bat_app = APP_DIR / "launch.bat"
+    bat_app.write_text(textwrap.dedent(f"""\
         @echo off
         title {APP_NAME}
         cd /d "{APP_DIR}"
         if not exist "logs" mkdir logs
-        echo Starting {APP_NAME}...
-        start "" "{streamlit_cmd}" run app.py ^
+        echo Starting {APP_NAME} on port {port}...
+        "{streamlit_exe}" run app.py ^
             --server.port {port} ^
             --server.headless false
-        timeout /t 3 /nobreak >nul
-        start http://localhost:{port}
-    """))
-    _ok(f"Launcher: {bat_file}")
+        pause
+    """), encoding="utf-8")
 
-    # ── PowerShell: create a proper .lnk shortcut with an icon
-    lnk_file = desktop / f"{APP_NAME}.lnk"
-    ps_script = textwrap.dedent(f"""\
-        $ws = New-Object -ComObject WScript.Shell
-        $lnk = $ws.CreateShortcut("{lnk_file}")
-        $lnk.TargetPath = "{bat_file}"
-        $lnk.WorkingDirectory = "{APP_DIR}"
-        $lnk.Description = "{APP_NAME}"
-        $lnk.WindowStyle = 7
-        $lnk.Save()
-    """)
+    # ── 2. Invisible VBScript launcher on Desktop
+    #    VBScript runs the bat file with WindowStyle=0 (hidden), so no black
+    #    terminal window appears when you double-click.
+    vbs_file = desktop / "Options Trading Signals.vbs"
+    vbs_file.write_text(textwrap.dedent(f"""\
+        ' Options Trading Signals — silent launcher
+        ' Double-click this file to start the app (no terminal window).
+        Set sh = CreateObject("WScript.Shell")
+        sh.Run "cmd /c """"{bat_app}""""", 0, False
+    """), encoding="utf-8")
+    _ok(f"Desktop launcher (VBS): {vbs_file}")
+
+    # ── 3. .lnk shortcut pointing at the VBS so it shows a nice name/icon
+    lnk_file = desktop / "Options Trading Signals.lnk"
+    ps_script = (
+        f'$ws = New-Object -ComObject WScript.Shell;'
+        f'$lnk = $ws.CreateShortcut("{lnk_file}");'
+        f'$lnk.TargetPath = "wscript.exe";'
+        f'$lnk.Arguments = """{vbs_file}""";'
+        f'$lnk.WorkingDirectory = "{APP_DIR}";'
+        f'$lnk.Description = "{APP_NAME}";'
+        f'$lnk.WindowStyle = 1;'
+        f'$lnk.Save()'
+    )
     try:
         subprocess.run(
             ["powershell", "-NonInteractive", "-Command", ps_script],
-            check=True, capture_output=True, timeout=15
+            check=True, capture_output=True, timeout=15,
         )
-        _ok(f"Shortcut: {lnk_file}")
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        _warn("Could not create .lnk shortcut — use the .bat file directly")
+        _ok(f"Desktop shortcut (.lnk): {lnk_file}")
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        _warn(f"Could not create .lnk — use the .vbs file directly ({e})")
 
     print()
-    print("  \033[33mNOTE:\033[0m To change the shortcut icon: right-click →")
-    print("  Properties → Change Icon → browse for an icon file.")
+    print(f"  \033[32mLauncher files are on your Desktop:\033[0m")
+    print(f"  • Options Trading Signals.lnk  ← double-click this")
+    print(f"  • Options Trading Signals.vbs  ← backup (same thing)")
+    print()
+    print("  If Windows asks 'How do you want to open this?', choose")
+    print("  \033[1mMicrosoft Windows Based Script Host\033[0m and tick 'Always'.")
+    print()
+    print("  \033[33mIf nothing appears on Desktop:\033[0m open File Explorer and")
+    print(f"  navigate to:  {desktop}")
 
 
 def create_launcher(venv_path: Path, port: int) -> None:
