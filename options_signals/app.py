@@ -79,6 +79,8 @@ pages = [
     ("📈", "Backtest",          "Replay signals on 252 days of historical data (indicative)"),
     ("🔍", "Scanner",           "Scan top 30 F&O stocks for options signals"),
     ("🤖", "Mock Trading",      "Paper trading platform — manual trades + autonomous bot"),
+    ("📋", "Orders",            "Order book — all executed trades by source and strategy"),
+    ("🛡", "Risk",              "Position sizing, daily loss limits, circuit breaker"),
 ]
 
 cols = st.columns(2)

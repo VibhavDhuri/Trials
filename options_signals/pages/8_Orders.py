@@ -1,0 +1,161 @@
+"""
+Orders — Executed order history and active positions by source/strategy.
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+import streamlit as st
+import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from positions.tracker import get_all_positions, close_position, realised_pnl, gross_pnl
+from broker.order_manager import is_live_trading_enabled
+from utils.helpers import now_ist
+
+st.set_page_config(page_title="Orders", page_icon="📋", layout="wide")
+
+with st.sidebar:
+    st.title("📋 Orders")
+    st.caption(f"IST: {now_ist().strftime('%d %b %Y  %H:%M:%S')}")
+    st.divider()
+
+    _mode_live = is_live_trading_enabled()
+    if _mode_live:
+        st.error("🔴 LIVE TRADING ENABLED")
+    else:
+        st.info("📋 Paper Trading Mode")
+
+    st.subheader("Filters")
+    src_filter = st.multiselect(
+        "Source", ["SIGNAL", "MANUAL", "BOT"], default=["SIGNAL", "MANUAL", "BOT"]
+    )
+    status_filter = st.multiselect(
+        "Status", ["OPEN", "CLOSED"], default=["OPEN", "CLOSED"]
+    )
+
+st.title("📋 Order Book")
+
+all_positions = get_all_positions()
+
+if not all_positions:
+    st.info("No orders yet. Execute signals or add positions from the Portfolio page.")
+    st.stop()
+
+# Apply filters
+filtered = [
+    p for p in all_positions
+    if p.source in src_filter and p.status in status_filter
+]
+
+if not filtered:
+    st.info("No orders match the selected filters.")
+    st.stop()
+
+# ── Summary metrics ───────────────────────────────────────────────────────────
+open_pos  = [p for p in all_positions if p.status == "OPEN"]
+closed_pos = [p for p in all_positions if p.status == "CLOSED"]
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Total Orders", len(all_positions))
+m2.metric("Open",   len(open_pos))
+m3.metric("Closed", len(closed_pos))
+
+total_realised = sum(realised_pnl(p) for p in closed_pos)
+m4.metric(
+    "Total Realised P&L",
+    f"₹{total_realised:+,.0f}",
+    delta=f"{'▲' if total_realised >= 0 else '▼'} {abs(total_realised):,.0f}",
+    delta_color="normal" if total_realised >= 0 else "inverse",
+)
+
+st.divider()
+
+# ── By strategy breakdown ─────────────────────────────────────────────────────
+tags = sorted({p.strategy_tag for p in all_positions if p.strategy_tag})
+if tags:
+    st.subheader("P&L by Strategy")
+    strat_rows = []
+    for tag in tags:
+        tag_pos = [p for p in closed_pos if p.strategy_tag == tag]
+        pnl_sum = sum(realised_pnl(p) for p in tag_pos)
+        wins = sum(1 for p in tag_pos if realised_pnl(p) > 0)
+        strat_rows.append({
+            "Strategy": tag,
+            "Closed Trades": len(tag_pos),
+            "Win Rate": f"{wins/len(tag_pos)*100:.0f}%" if tag_pos else "—",
+            "Total P&L (₹)": f"{pnl_sum:+,.0f}",
+        })
+    st.dataframe(pd.DataFrame(strat_rows), use_container_width=True, hide_index=True)
+    st.divider()
+
+# ── Order table ───────────────────────────────────────────────────────────────
+st.subheader(f"Orders ({len(filtered)} shown)")
+
+rows = []
+for p in sorted(filtered, key=lambda x: x.entry_time, reverse=True):
+    pnl_disp = (
+        f"₹{realised_pnl(p):+,.0f}" if p.status == "CLOSED"
+        else "—"
+    )
+    rows.append({
+        "ID": p.id,
+        "Entry Time": p.entry_time[:16].replace("T", " "),
+        "Symbol": p.symbol,
+        "Expiry": p.expiry,
+        "Strike": int(p.strike),
+        "Type": p.opt_type,
+        "Action": p.action,
+        "Lots": p.quantity,
+        "Entry ₹": f"{p.entry_price:,.2f}",
+        "Exit ₹": f"{p.exit_price:,.2f}" if p.exit_price else "—",
+        "P&L": pnl_disp,
+        "Status": p.status,
+        "Source": p.source,
+        "Strategy": p.strategy_tag or "—",
+    })
+
+df = pd.DataFrame(rows)
+
+def _colour_row(row):
+    if row["Status"] == "OPEN":
+        return ["background-color: #1a2a1a"] * len(row)
+    pnl_str = row.get("P&L", "—")
+    if pnl_str and pnl_str != "—":
+        pnl_val = float(pnl_str.replace("₹", "").replace(",", "").replace("+", ""))
+        if pnl_val > 0:
+            return ["background-color: #0d2b0d"] * len(row)
+        elif pnl_val < 0:
+            return ["background-color: #2b0d0d"] * len(row)
+    return [""] * len(row)
+
+st.dataframe(df.style.apply(_colour_row, axis=1), use_container_width=True, hide_index=True)
+
+st.divider()
+
+# ── Close open positions ───────────────────────────────────────────────────────
+open_filtered = [p for p in filtered if p.status == "OPEN"]
+if open_filtered:
+    st.subheader("Close Open Orders")
+    for p in open_filtered:
+        with st.expander(f"{p.action} {p.symbol} {p.opt_type} {int(p.strike)} exp:{p.expiry}  [entry: ₹{p.entry_price:,.2f}]"):
+            col_a, col_b, col_c = st.columns([2, 2, 1])
+            exit_px = col_a.number_input(
+                "Exit price ₹", 0.01, 99999.0, float(p.entry_price), step=0.5,
+                key=f"ord_ep_{p.id}"
+            )
+            est_pnl = (exit_px - p.entry_price) * p.quantity
+            from config import INDICES as _IDX
+            _lot = _IDX[p.symbol].lot_size if p.symbol in _IDX else 1
+            sign = 1 if p.action == "BUY" else -1
+            est_pnl_inr = (exit_px - p.entry_price) * p.quantity * _lot * sign
+            col_b.metric("Est. P&L", f"₹{est_pnl_inr:+,.0f}")
+            if col_c.button("Close", key=f"ord_cls_{p.id}", type="primary"):
+                close_position(p.id, exit_px)
+                st.success(f"Closed position {p.id}.")
+                st.rerun()
+
+st.divider()
+st.caption("⚠️  P&L is gross — excludes brokerage, STT (0.125% on exercise), and exchange charges.")

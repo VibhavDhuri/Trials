@@ -16,6 +16,7 @@ from config import INDICES, IST
 from positions.builder import Leg, analyse
 from positions.tracker import add_position
 from data.options_chain import OptionsChainFetcher
+from broker.order_manager import execute_paper_or_live, is_live_trading_enabled, OrderManager
 from utils.helpers import now_ist
 
 st.set_page_config(page_title="Strategy Builder", page_icon="🔧", layout="wide")
@@ -121,8 +122,7 @@ if st.button("Analyse Strategy", type="primary"):
     g4.metric("Net Vega",  f"{result.net_vega:+.4f} /1%IV")
 
     # Margin estimate
-    from config import INDICES
-    lot_size = INDICES.get(symbol, {}).get("lot_size", 75)
+    lot_size = INDICES[symbol].lot_size
     margin_est = sum(
         leg.premium * leg.quantity * lot_size * 3
         for leg in legs if leg.action == "SELL"
@@ -182,6 +182,62 @@ if st.button("Analyse Strategy", type="primary"):
                 strategy_tag="Strategy Builder",
             )
         st.success(f"Added {len(legs)} leg(s) to portfolio.")
+
+    # Execute via broker
+    st.subheader("Execute via Broker")
+    _live = is_live_trading_enabled()
+    _trade_mode = "🔴 LIVE ORDER" if _live else "📋 Paper Trade"
+    st.caption(f"Trade mode: **{_trade_mode}**")
+    if _live:
+        st.warning("Live trading enabled — this will place real orders with real money!")
+    if st.button(
+        f"Execute Strategy ({_trade_mode})", type="primary", key="sb_exec_btn"
+    ):
+        st.session_state["sb_exec_confirm"] = True
+
+    if st.session_state.get("sb_exec_confirm"):
+        st.warning(f"⚠️ Execute **{n_legs}** leg(s) in **{_trade_mode}** mode?")
+        _sb1, _sb2 = st.columns(2)
+        if _sb1.button("✅ Confirm Execution", key="sb_exec_yes"):
+            _mgr = None
+            if _live and client:
+                _mgr = OrderManager(client._token)
+            _sb_ok, _sb_fails, _sb_mode = 0, [], "PAPER"
+            for _leg in legs:
+                try:
+                    _ikey = (
+                        f"NSE_FO|{symbol}_{expiry_sel}"
+                        f"_{int(_leg.strike)}_{_leg.opt_type}"
+                    )
+                    _sb_mode, _pos = execute_paper_or_live(
+                        manager=_mgr,
+                        instrument_key=_ikey,
+                        symbol=symbol,
+                        expiry=expiry_sel,
+                        strike=_leg.strike,
+                        opt_type=_leg.opt_type,
+                        action=_leg.action,
+                        quantity=_leg.quantity,
+                        ltp=_leg.premium,
+                        strategy_tag="Strategy Builder",
+                        source="MANUAL",
+                    )
+                    if _pos:
+                        _sb_ok += 1
+                except Exception as _e:
+                    _sb_fails.append(str(_e))
+            if _sb_ok:
+                st.success(
+                    f"✅ {_sb_ok} leg(s) executed in **{_sb_mode}** mode. "
+                    "View in Portfolio or Orders page ▶"
+                )
+                st.session_state.pop("portfolio_ltp_map", None)
+            for _fm in _sb_fails:
+                st.error(f"❌ {_fm}")
+            st.session_state["sb_exec_confirm"] = False
+        if _sb2.button("❌ Cancel", key="sb_exec_no"):
+            st.session_state["sb_exec_confirm"] = False
+            st.rerun()
 
 st.divider()
 st.caption(

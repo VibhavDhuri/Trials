@@ -28,6 +28,7 @@ from alerts.alert_engine import (
 )
 from alerts.notifiers import build_notifiers
 from utils.helpers import is_market_open, market_status, now_ist, format_inr, dte_label
+from broker.order_manager import execute_paper_or_live, is_live_trading_enabled, OrderManager
 
 st.set_page_config(page_title="Signals", page_icon="📊", layout="wide")
 
@@ -210,6 +211,70 @@ else:
                         if det.breakevens:
                             st.markdown(f"**Breakeven(s):** {' / '.join(f'{b:,.0f}' for b in det.breakevens)}")
                         st.caption(det.disclaimer)
+
+                        # ── Execute Signal ──────────────────────────────────
+                        st.divider()
+                        _live = is_live_trading_enabled()
+                        _trade_mode = "🔴 LIVE ORDER" if _live else "📋 Paper Trade"
+                        st.caption(f"Trade mode: **{_trade_mode}**")
+                        if _live:
+                            st.warning("Live trading enabled — real money at risk.")
+                        _qty = st.number_input(
+                            "Quantity (lots)", 1, 50, 1, key=f"sig_qty_{i}_{j}"
+                        )
+                        if st.button(
+                            f"Execute Signal ({_trade_mode})",
+                            key=f"exec_{i}_{j}",
+                            use_container_width=True,
+                        ):
+                            st.session_state[f"exec_confirm_{i}_{j}"] = True
+
+                        if st.session_state.get(f"exec_confirm_{i}_{j}"):
+                            st.warning(
+                                f"⚠️ Execute **{sig.direction.value}** on **{symbol}** "
+                                f"— {len(det.legs)} leg(s) in {_trade_mode} mode?"
+                            )
+                            _ec1, _ec2 = st.columns(2)
+                            if _ec1.button("✅ Confirm", key=f"exec_yes_{i}_{j}"):
+                                _mgr = None
+                                if _live and client:
+                                    _mgr = OrderManager(client._token)
+                                _exec_ok, _exec_fails, _mode_used = 0, [], "PAPER"
+                                for _leg in det.legs:
+                                    try:
+                                        _ikey = (
+                                            f"NSE_FO|{symbol}_{sig.expiry_date}"
+                                            f"_{int(_leg['strike'])}_{_leg['opt_type']}"
+                                        )
+                                        _mode_used, _pos = execute_paper_or_live(
+                                            manager=_mgr,
+                                            instrument_key=_ikey,
+                                            symbol=symbol,
+                                            expiry=sig.expiry_date,
+                                            strike=float(_leg["strike"]),
+                                            opt_type=_leg["opt_type"],
+                                            action=_leg["action"],
+                                            quantity=_qty,
+                                            ltp=float(_leg.get("ltp") or 0),
+                                            strategy_tag=sig.strategy,
+                                            source="SIGNAL",
+                                        )
+                                        if _pos:
+                                            _exec_ok += 1
+                                    except Exception as _e:
+                                        _exec_fails.append(str(_e))
+                                if _exec_ok:
+                                    st.success(
+                                        f"✅ {_exec_ok} leg(s) added in **{_mode_used}** mode."
+                                        " View in Portfolio or Orders page ▶"
+                                    )
+                                    st.session_state.pop("portfolio_ltp_map", None)
+                                for _fm in _exec_fails:
+                                    st.error(f"❌ {_fm}")
+                                st.session_state[f"exec_confirm_{i}_{j}"] = False
+                            if _ec2.button("❌ Cancel", key=f"exec_no_{i}_{j}"):
+                                st.session_state[f"exec_confirm_{i}_{j}"] = False
+                                st.rerun()
 
 st.divider()
 
